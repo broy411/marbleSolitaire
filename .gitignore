@@ -1,0 +1,7 @@
+# Binaries and build artifacts
+msGame
+*.o
+*.dSYM/
+
+# macOS system files
+.DS_Store
