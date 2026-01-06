@@ -9,7 +9,7 @@
     implement Marble Solitaire.
 
 */
-
+#include <immintrin.h>
 #include "msBoard.h"
 #include <array>
 #include <algorithm>
@@ -27,11 +27,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#ifdef __BMI2__
-#define HAVE_PEXT 1
-#else
-#define HAVE_PEXT 0
-#endif
+
 
 
 /************************** structs and types: ****************************/
@@ -123,7 +119,7 @@ namespace {
 
     // const uint64_t DEFAULT_BOARD =    0x18FBFFFFEF8E0000; // - empty (0, 2) .14 fastest, .34rn
     const Board DEFAULT_BOARD =    0x38FBFFFEEF8E0000; // - empty (2,3) 63s -> 56 -> 43 (w O3) -> 25 (w 16GiB) -> 25 (w REVERSED - others got faster)
-    // const uint64_t DEFAULT_BOARD =    0x38DBFFFFEF8E0000; // - empty (1, 3) 1.47s
+//     const uint64_t DEFAULT_BOARD =    0x38DBFFFFEF8E0000; // - empty (1, 3) 1.47s
     const Board EMPTY_BOARD = 0ULL;
 
 
@@ -277,31 +273,32 @@ namespace {
     *********************************/
     inline Column getCol(Board b, unsigned c) {
         assert(c < NUM_COLS);
-        #if HAVE_PEXT
+       #if HAVE_PEXT
             return (Column)_pext_u64(b, COL_MASKS[c]);
-        #else
-            return ((b >> (ROW_IDX(0) - c)) & 1ULL) << 6 |
-                   ((b >> (ROW_IDX(1) - c)) & 1ULL) << 5 |
-                   ((b >> (ROW_IDX(2) - c)) & 1ULL) << 4 |
-                   ((b >> (ROW_IDX(3) - c)) & 1ULL) << 3 |
-                   ((b >> (ROW_IDX(4) - c)) & 1ULL) << 2 |
-                   ((b >> (ROW_IDX(5) - c)) & 1ULL) << 1 |
-                   ((b >> (ROW_IDX(6) - c)) & 1ULL) << 0;
-        #endif
+       #else
+           return ((b >> (ROW_IDX(0) - c)) & 1ULL) << 6 |
+                  ((b >> (ROW_IDX(1) - c)) & 1ULL) << 5 |
+                  ((b >> (ROW_IDX(2) - c)) & 1ULL) << 4 |
+                  ((b >> (ROW_IDX(3) - c)) & 1ULL) << 3 |
+                  ((b >> (ROW_IDX(4) - c)) & 1ULL) << 2 |
+                  ((b >> (ROW_IDX(5) - c)) & 1ULL) << 1 |
+                  ((b >> (ROW_IDX(6) - c)) & 1ULL) << 0;
+       #endif
     }
     
 
     std::array<Board, NUM_COLS> getColMasks()
     {
+	std::cout << HAVE_PEXT << std::endl;
         std::array<Board, NUM_COLS> masks;
         for (int c = 0; c < NUM_COLS; c++) {
-            masks[c] = (1ULL << (ROW_IDX(0) - c)) << 6 |
-                       (1ULL << (ROW_IDX(1) - c)) << 5 |
-                       (1ULL << (ROW_IDX(2) - c)) << 4 |
-                       (1ULL << (ROW_IDX(3) - c)) << 3 |
-                       (1ULL << (ROW_IDX(4) - c)) << 2 |
-                       (1ULL << (ROW_IDX(5) - c)) << 1 |
-                       (1ULL << (ROW_IDX(6) - c)) << 0;
+            masks[c] = (1ULL << (ROW_IDX(0) - c)) |
+                       (1ULL << (ROW_IDX(1) - c)) |
+                       (1ULL << (ROW_IDX(2) - c)) |
+                       (1ULL << (ROW_IDX(3) - c)) |
+                       (1ULL << (ROW_IDX(4) - c)) |
+                       (1ULL << (ROW_IDX(5) - c)) |
+                       (1ULL << (ROW_IDX(6) - c));
         }
         return masks;
     }
@@ -395,6 +392,8 @@ Notes:
 *********************************/
 msBoard::msBoard(BoardType bt) 
 {
+    std::cout << std::bitset<8>((Column)_pext_u64(DEFAULT_BOARD, COL_MASKS[3])) << std::endl;
+
 
     if (bt == DEFAULT) {
         board = DEFAULT_BOARD;

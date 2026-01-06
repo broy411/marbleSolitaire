@@ -2,6 +2,7 @@
 #include <utility>
 #include <vector>
 #include <array>
+#include <cstdint>
 #include "msBoard.h"
 
 using namespace std;
@@ -16,7 +17,7 @@ class msGame {
        unavailable. That said, there is a small overhead cost of allocating
        the memory of ~0.5s
     */
-    #define HAVE_16GB_RAM 1
+    #define HAVE_16GB_RAM 0
     
     public:
         // structured as "(row, col) -> up | down | left | right"

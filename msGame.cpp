@@ -11,6 +11,7 @@
 *     solution to their current board at any time (if one exists). 
 */
 
+#include <chrono>
 
 #include "msGame.h"
 #include "msBoard.h"
@@ -31,6 +32,8 @@
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
+#include <stack>
 
 
 /* 

@@ -1,11 +1,23 @@
 
-
+#include <cstdint>
 #include <vector>
 
 #ifndef MSBOARD_H_
 #define MSBOARD_H_
 
 class msBoard {
+
+    /* 
+      The _pext_u64 instruction only exists on intel's x86 architecture - 
+      it enables about a 15% speedup when available
+    */
+    #ifdef __BMI2__
+        #define HAVE_PEXT 1
+    #else
+        #define HAVE_PEXT 0
+    #endif    
+
+
     using Board = uint64_t;
 
     public:
