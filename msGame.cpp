@@ -149,8 +149,8 @@ namespace {
             nextBoard = nextBoard.getCanonicalBoard();
 
             if (HAVE_16GB_RAM) {
-                if (((msBitmap<msBoard, decltype(&msBoard::boardToBits)>*) seen)->
-                        testAndSetBit(nextBoard)) {
+                if (((msBitmap<msBoard, decltype(&msBoard::boardToBits)>*) seen)
+                                                ->testAndSetBit(nextBoard)) {
                     continue;
                 }
             } else { 
@@ -161,8 +161,11 @@ namespace {
             }
             
             if (nextBoard.hasWon()) {
+                if (!HAVE_16GB_RAM) 
+                    delete (robin_hood::unordered_flat_set<uint64_t> *)seen;
+                
+                
                 std::vector<const msBoard::Move*> solution;
-
                 // getMoveOrder();
                 std::stack<StackFrame> tmp = dfs;
                 while (!tmp.empty()) {
@@ -233,8 +236,6 @@ void msGame::playGame()
 {
     board->printBoard();
 
-    int *b = new int;
-    (void) b;
     
     std::cout << solvable(*board) << std::endl;
 }

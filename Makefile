@@ -7,8 +7,6 @@
 CXX      = clang++
 CXXFLAGS = -g -O3 -Wall -Wextra -Wpedantic -Wshadow -std=c++17
 
-
-
 # This rule builds msGame executable
 # The $^ refers to all the object files listed as dependencies
 # The $@ means the name of the executable will be the name of the target
@@ -27,6 +25,5 @@ msBoard.o: msBoard.cpp msBoard.h
 	$(CXX) $(CXXFLAGS) -c msBoard.cpp
 
 # remove executables, object code, and temporary files from the current folder
-# -- the executable created by unit_test is called a.out
 clean: 
 	rm *.o *~ a.out

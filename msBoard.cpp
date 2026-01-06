@@ -1,30 +1,38 @@
-#include "msBoard.h"
+/*
+    msBoard.cpp
+    January 4th, 2026
+    Brendan Roy
 
+    This file implements the msBoard.h interface. An msBoard is a board for
+    French Marble Solitaire, where users can print the board, make moves, and
+    generate valid moves. It's designed to be used by another class to
+    implement Marble Solitaire.
+
+*/
+
+#include "msBoard.h"
 #include <array>
 #include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <cstdint>
-
-using Board = uint64_t;
-using Row = uint8_t;
-using Column = uint8_t;
 #include <iostream>
 #include "robin_hood.h"
 #include <unordered_set>
-#include <cstdint>
-#include <assert.h>
 #include <bitset>
 #include <string>
 #include <utility>
 #include <vector>
-#include <array>
-#include <algorithm>
-
 #include <sys/mman.h>
-#include <cstdint>
 #include <cstring>
 #include <stdexcept>
+
+#ifdef __BMI2__
+#define HAVE_PEXT 1
+#else
+#define HAVE_PEXT 0
+#endif
+
 
 /************************** structs and types: ****************************/
 /*
@@ -68,24 +76,14 @@ using Column = uint8_t;
                             indices of the positions that will be EMPTY after
                             the move is executed
 ******************/
+// The struct Move definition is in the msBoard.h file
 
-struct msBoard::Move {
-    private:
-    Board setBit;
-    Board clearBits;
-
-    Move(Board s, Board c) : setBit(s), clearBits(c) {}
-
-    friend void printMove(const msBoard::Move *m);
-
-    friend const std::vector<msBoard::Move> setupAllMoves();
-    friend msBoard msBoard::applyMove(const Move*) const;
-    friend void msBoard::validMoves(std::vector<const msBoard::Move*>&) 
-                                                                        const;
-};
+// ALL_MOVES stores every possible move to be made on the board
+const std::vector<msBoard::Move> msBoard::ALL_MOVES = msBoard::setupAllMoves();
 
 
-// const std::vector<msBoard::Move> setupAllMoves();
+
+// Anonymous Namespace:
 namespace {
     /*************************** Enum and Constants ***************************/
     /*
@@ -124,9 +122,10 @@ namespace {
                                        };
 
     // const uint64_t DEFAULT_BOARD =    0x18FBFFFFEF8E0000; // - empty (0, 2) .14 fastest, .34rn
-    const Board DEFAULT_BOARD =    0x38FBFFFEEF8E0000; // - empty (2,3) 63s -> 56 -> 43 (w O3) -> 25 (w 16GiB)
+    const Board DEFAULT_BOARD =    0x38FBFFFEEF8E0000; // - empty (2,3) 63s -> 56 -> 43 (w O3) -> 25 (w 16GiB) -> 25 (w REVERSED - others got faster)
     // const uint64_t DEFAULT_BOARD =    0x38DBFFFFEF8E0000; // - empty (1, 3) 1.47s
     const Board EMPTY_BOARD = 0ULL;
+
 
 
     const int WINNING_MARBLE_COUNT = 1;
@@ -141,11 +140,49 @@ namespace {
     const int COL_START_IDX[] = {2,1,0,0,0,1,2};
     const int COL_END_IDX[]   = {4,5,6,6,6,5,4};
     
-    /**************************** Private Functions ***************************/
 
+    std::array<uint8_t, 128> reverseAllRowCols();
 
-    // last constant to declare
-    // const std::vector<MoveInternal> ALL_MOVES = setupAllMoves();
+    std::array<Board, NUM_COLS> getColMasks();
+
+    const std::array<uint8_t, 128> REVERSED = reverseAllRowCols();
+    const std::array<Board, NUM_COLS> COL_MASKS = getColMasks();
+
+    /************************ Private Helper Functions ************************/
+
+   /************ reverse7 *********
+     Reverses the least significant 7 bits of an integer - can take in either
+     a Row or a Column
+
+    Parameters: 
+        uint8_t x - an 8-bit integer that we reverse 
+    Returns: 
+        A uint8_t - MSB is 0, next 7 are the 7 LSB from x in reverse order
+    Expects: 
+        Nothing
+    Notes:
+        The MSB of x is ignored and does not affect the return value
+    *********************************/
+    inline uint8_t reverse7(uint8_t x) {
+        uint8_t rev = 0;
+        rev |= (x & 0x01) << 6; // bit0 -> bit6
+        rev |= (x & 0x02) << 4; // bit1 -> bit5
+        rev |= (x & 0x04) << 2; // bit2 -> bit4
+        rev |= (x & 0x08);      // bit3 -> bit3
+        rev |= (x & 0x10) >> 2; // bit4 -> bit2
+        rev |= (x & 0x20) >> 4; // bit5 -> bit1
+        rev |= (x & 0x40) >> 6; // bit6 -> bit0
+        return rev;
+    }
+
+    std::array<uint8_t, 128> reverseAllRowCols()
+    {
+        std::array<uint8_t, 128> reversed;
+        for (int i = 0; i < 128; i++) {
+            reversed[i] = reverse7(i);
+        }
+        return reversed;
+    }
 
 
     /************ bitIndex *********
@@ -240,59 +277,76 @@ namespace {
     *********************************/
     inline Column getCol(Board b, unsigned c) {
         assert(c < NUM_COLS);
-        return ((b >> (ROW_IDX(0) - c)) & 1ULL) << 6 |
-            ((b >> (ROW_IDX(1) - c)) & 1ULL) << 5 |
-            ((b >> (ROW_IDX(2) - c)) & 1ULL) << 4 |
-            ((b >> (ROW_IDX(3) - c)) & 1ULL) << 3 |
-            ((b >> (ROW_IDX(4) - c)) & 1ULL) << 2 |
-            ((b >> (ROW_IDX(5) - c)) & 1ULL) << 1 |
-            ((b >> (ROW_IDX(6) - c)) & 1ULL) << 0;
+        #if HAVE_PEXT
+            return (Column)_pext_u64(b, COL_MASKS[c]);
+        #else
+            return ((b >> (ROW_IDX(0) - c)) & 1ULL) << 6 |
+                   ((b >> (ROW_IDX(1) - c)) & 1ULL) << 5 |
+                   ((b >> (ROW_IDX(2) - c)) & 1ULL) << 4 |
+                   ((b >> (ROW_IDX(3) - c)) & 1ULL) << 3 |
+                   ((b >> (ROW_IDX(4) - c)) & 1ULL) << 2 |
+                   ((b >> (ROW_IDX(5) - c)) & 1ULL) << 1 |
+                   ((b >> (ROW_IDX(6) - c)) & 1ULL) << 0;
+        #endif
     }
+    
+
+    std::array<Board, NUM_COLS> getColMasks()
+    {
+        std::array<Board, NUM_COLS> masks;
+        for (int c = 0; c < NUM_COLS; c++) {
+            masks[c] = (1ULL << (ROW_IDX(0) - c)) << 6 |
+                       (1ULL << (ROW_IDX(1) - c)) << 5 |
+                       (1ULL << (ROW_IDX(2) - c)) << 4 |
+                       (1ULL << (ROW_IDX(3) - c)) << 3 |
+                       (1ULL << (ROW_IDX(4) - c)) << 2 |
+                       (1ULL << (ROW_IDX(5) - c)) << 1 |
+                       (1ULL << (ROW_IDX(6) - c)) << 0;
+        }
+        return masks;
+    }
+ 
 
 
-    /************ reverse7 *********
-     Reverses the least significant 7 bits of an integer - can take in either
-     a Row or a Column
 
+    /************ getBit *********
+     Gets a bit from a Board at a given index - returns the bit in the LSB of
+     a uint64_t - tells us whether the board holds a marble at position (r, c)
+    
     Parameters: 
-        uint8_t x - an 8-bit integer that we reverse 
+        Board b    - the board that we get the bit from
+        unsigned r - the row of the bit we get
+        unsigned c - the column of the bit we get
     Returns: 
-        A uint8_t - MSB is 0, next 7 are the 7 LSB from x in reverse order
+        uint64_t whose LSB holds the bit at (r, c) - ie either a 0ULL or 1ULL
     Expects: 
-        Nothing
+        r and c must be valid row and column indices
     Notes:
-        The MSB of x is ignored and does not affect the return value
+        Will CRE if r > NUM_ROWS or if c > NUM_COLS
     *********************************/
-    inline uint8_t reverse7(uint8_t x) {
-        uint8_t rev = 0;
-        rev |= (x & 0x01) << 6; // bit0 -> bit6
-        rev |= (x & 0x02) << 4; // bit1 -> bit5
-        rev |= (x & 0x04) << 2; // bit2 -> bit4
-        rev |= (x & 0x08);      // bit3 -> bit3
-        rev |= (x & 0x10) >> 2; // bit4 -> bit2
-        rev |= (x & 0x20) >> 4; // bit5 -> bit1
-        rev |= (x & 0x40) >> 6; // bit6 -> bit0
-        return rev;
-    }
+    inline uint64_t getBit(Board b, unsigned r, unsigned c) {
+        assert(r < NUM_ROWS);
+        assert(c < NUM_COLS);
 
-
-
-
-    inline Board getBit(Board b, int r, int c) {
         return (b >> bitIndex(r, c)) & 1ULL;
     }
 
-    struct MoveInternal {
-        Board setBit;
-        Board clearBits;
-        MoveInternal(Board s, Board c) { setBit = s; clearBits = c; }
-    };
+}
+/*********************** Private Member Functions *****************************/
+/************ setupAllMoves *********
+ Generates all possible moves that can ever be played during a game
 
-    std::vector<MoveInternal> setupAllMovesInternal();
-    const std::vector<MoveInternal> ALL_MOVES = setupAllMovesInternal();
-
- std::vector<MoveInternal> setupAllMovesInternal()  {
-    std::vector<MoveInternal> moves;
+Parameters: none
+Returns: 
+    vector<Move> containing all the possible moves
+Expects: 
+    All constants must have their correct values
+Notes:
+    Will not throw any errors
+*********************************/
+std::vector<msBoard::Move> msBoard::setupAllMoves()  
+{
+    std::vector<msBoard::Move> moves;
 
     for (int r = 0; r < NUM_ROWS; r++) {
         for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
@@ -301,80 +355,32 @@ namespace {
             unsigned src = bitIndex(r, c);
 
             if (r >= 2 && PLAYABLE[r-1][c] && PLAYABLE[r-2][c])
-                moves.emplace_back(
-                    Board(1) << bitIndex(r-2, c),
-                    (Board(1) << src) | (Board(1) << bitIndex(r-1, c)));
+                moves.push_back(Move(Board(1) << bitIndex(r-2, c),
+                                     (Board(1) << src) | 
+                                     (Board(1) << bitIndex(r-1, c))));
 
             if (r <= 4 && PLAYABLE[r+1][c] && PLAYABLE[r+2][c])
-                moves.emplace_back(
-                    Board(1) << bitIndex(r+2, c),
-                    (Board(1) << src) | (Board(1) << bitIndex(r+1, c)));
+                moves.push_back(Move(Board(1) << bitIndex(r+2, c),
+                                     (Board(1) << src) | 
+                                     (Board(1) << bitIndex(r+1, c))));
 
             if (c >= 2 && PLAYABLE[r][c-1] && PLAYABLE[r][c-2])
-                moves.emplace_back(
-                    Board(1) << bitIndex(r, c-2),
-                    (Board(1) << src) | (Board(1) << bitIndex(r, c-1)));
+                moves.push_back(Move(Board(1) << bitIndex(r, c-2),
+                                     (Board(1) << src) | 
+                                     (Board(1) << bitIndex(r, c-1))));
 
             if (c <= 4 && PLAYABLE[r][c+1] && PLAYABLE[r][c+2])
-                moves.emplace_back(
-                    Board(1) << bitIndex(r, c+2),
-                    (Board(1) << src) | (Board(1) << bitIndex(r, c+1)));
-            }
+                moves.push_back(Move(Board(1) << bitIndex(r, c+2),
+                                     (Board(1) << src) | 
+                                     (Board(1) << bitIndex(r, c+1))));
         }
-        return moves;
     }
+
+    return moves;
 }
-    /************ setupAllMoves *********
-     Generates all possible moves that can ever be played during a game
-    
-    Parameters: none
-    Returns: 
-        vector<Move> containing all the possible moves
-    Expects: 
-        All constants must have their correct values
-    Notes:
-        Will not throw any errors
-    *********************************/
-    // const std::vector<msBoard::Move> setupAllMoves()  {
-    //     std::vector<msBoard::Move> moves;
 
-    //     for (int r = 0; r < NUM_ROWS; r++) {
-    //         for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
-    //             if (!PLAYABLE[r][c]) continue;
+/**************************** msBoard public functions ************************/
 
-    //             unsigned src = bitIndex(r, c);
-
-    //             if (r >= 2 && PLAYABLE[r-1][c] && PLAYABLE[r-2][c])
-    //                 moves.push_back(msBoard::Move(
-    //                     Board(1) << bitIndex(r-2, c),
-    //                     (Board(1) << src) | (Board(1) << bitIndex(r-1, c)))
-    //                 );
-
-    //             if (r <= 4 && PLAYABLE[r+1][c] && PLAYABLE[r+2][c])
-    //                 moves.push_back(msBoard::Move(
-    //                     Board(1) << bitIndex(r+2, c),
-    //                     (Board(1) << src) | (Board(1) << bitIndex(r+1, c)))
-    //                 );
-
-    //             if (c >= 2 && PLAYABLE[r][c-1] && PLAYABLE[r][c-2])
-    //                 moves.push_back(msBoard::Move(
-    //                     Board(1) << bitIndex(r, c-2),
-    //                     (Board(1) << src) | (Board(1) << bitIndex(r, c-1)))
-    //                 );
-
-    //             if (c <= 4 && PLAYABLE[r][c+1] && PLAYABLE[r][c+2])
-    //                 moves.push_back(msBoard::Move(
-    //                     Board(1) << bitIndex(r, c+2),
-    //                     (Board(1) << src) | (Board(1) << bitIndex(r, c+1)))
-    //                 );
-    //         }
-    //     }
-    //     return moves;
-    // }
-
-
-
-/* ======================= msBoard API ========================== */
 /************ msBoard - public constructor *********
  Constructor for msBoard class - users can choose between initializing an
  EMPTY board (no marbles), DEFAULT board (empty spot starts in top left), or 
@@ -389,6 +395,7 @@ Notes:
 *********************************/
 msBoard::msBoard(BoardType bt) 
 {
+
     if (bt == DEFAULT) {
         board = DEFAULT_BOARD;
     } else if (bt == EMPTY) {
@@ -432,16 +439,11 @@ Notes:
 *********************************/
 void msBoard::validMoves(std::vector<const msBoard::Move*> &moves) const 
 {
-    // for (const Move &m : ALL_MOVES) {
-    //     if (((board & m.clearBits) == m.clearBits) &&
-    //         ((board & m.setBit) == 0)) {
-    //         moves.push_back(&m);
-    //     }
-    // }
-    for (const MoveInternal& m : ALL_MOVES) {
+
+    for (const Move &m : ALL_MOVES) {
         if (((board & m.clearBits) == m.clearBits) &&
             ((board & m.setBit) == 0)) {
-            moves.push_back(reinterpret_cast<const Move*>(&m));
+            moves.push_back(&m);
         }
     }
 }
@@ -460,23 +462,25 @@ Expects:
 Notes:
     Will CRE if m is nullptr
 *********************************/
- msBoard msBoard::applyMove(const msBoard::Move *m) const {
+ msBoard msBoard::applyMove(const msBoard::Move *m) const 
+ {
     assert(m != nullptr);
 
-    Board next = (board | m->setBit) & ~m->clearBits;
+    Board next = (board | m->setBit) & ~(m->clearBits);
     return msBoard(next);
 }
-/************ boardToBits *********
-Converts a board to an index in the 'seen' bitmap
 
-Parameters: 
-    Board startBoard - a board to solve
+/************ boardToBits *********
+ Converts a board to its minimum representation of just 37 bits - each unique 
+ board will correspond exactly one output of this function
+
+Parameters: none
 Returns: 
-    A bool - true if solvable and false if not
-Expects: 
-    board should follow all Board invariants
+    A uint64_t - the least significant 37 bits contain a packed version of the
+                 board - exact structure is not relevant
 Notes:
-    board
+    This is not designed for board representation but rather a way to map every
+    possible board to a single representation of 37 bits
 *********************************/
 uint64_t msBoard::boardToBits() const 
 {
@@ -501,20 +505,46 @@ uint64_t msBoard::boardToBits() const
 
         return ret;
 }
+
+/****************** printBoard ********************
+ Prints an msboard as a 7x7 grid of 1s and 0s 
+    1 = marble
+    0 = empty
+Parameters: none
+Returns: void
+Notes:
+    Outputs to stdout
+***************************************************/
 void msBoard::printBoard() const 
 {
     for (int r = 0; r < NUM_ROWS; r++) {
         if (r == 0 || r == 6) std::cout << "  ";
         if (r == 1 || r == 5) std::cout << " ";
-        for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++)
+        for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
             std::cout << getBit(board, r, c);
+        }
         std::cout << "\n";
     }
 }
+
+/************ msBoard - private constructor *********
+ Constructor to be used by private functions
+
+Parameters: 
+    Board b - the board that the new instance of the class will have
+Returns: 
+    An instance of msBoard class
+Expects: 
+    b should follow all the Board invariants
+Notes:
+    Will NOT CRE if b is structured poorly, but will exhibit undefined 
+    behavior once other methods are called with this instance
+*********************************/
 msBoard::msBoard(Board b) 
 {
     board = b;
 }
+
 /************ geCanonicalBoard *********
  Gets the canonical version of the given board - all posible symmetries and
     rotations are considered
@@ -532,31 +562,26 @@ msBoard msBoard::getCanonicalBoard() const
 {
     // Identity rotation
     Board best = board;
-    // printBoard();
-    // std::cout << "best is : " << std::bitset<49>(board) << std::endl;
     Board boards[NUM_ROTATIONS] = { EMPTY_BOARD, EMPTY_BOARD, EMPTY_BOARD, 
                                     EMPTY_BOARD, EMPTY_BOARD, EMPTY_BOARD, 
                                     EMPTY_BOARD };
-
-
     for (int i = 0; i < NUM_ROWS; i++) {
         Row row = getRow(best, i);
         Column col = getCol(best, i);
-        Row reversedRow = reverse7(row);
-        Column reversedCol = reverse7(col);
 
-        boards[DEGREE_90]  = insertRow(boards[DEGREE_90],  i, reversedCol);
+        boards[DEGREE_90]  = insertRow(boards[DEGREE_90],  i, REVERSED[col]);
         boards[DEGREE_180] = insertRow(boards[DEGREE_180], MAX_ROW - i, 
-                                                                reversedRow);
+                                                                REVERSED[row]);
         boards[DEGREE_270] = insertRow(boards[DEGREE_270], MAX_ROW - i, 
                                                                         col);
-        boards[FLIP_H]     = insertRow(boards[FLIP_H],     i, reversedRow);
+        boards[FLIP_H]     = insertRow(boards[FLIP_H],     i, REVERSED[row]);
         boards[FLIP_V]     = insertRow(boards[FLIP_V],     MAX_ROW - i, 
                                                                         row);
         boards[FLIP_DIAG]  = insertRow(boards[FLIP_DIAG],  i, col);
         boards[FLIP_ANTI]  = insertRow(boards[FLIP_ANTI],  MAX_ROW - i, 
-                                                                reversedCol);
+                                                                REVERSED[col]);
     }
+
 
     for (Board curr : boards) {
         best = (curr < best) ? curr : best;
@@ -564,16 +589,12 @@ msBoard msBoard::getCanonicalBoard() const
     return msBoard(best);
 }
 
-uint64_t msBoard::getRawBoard() {
-    return board;
-}
-
-void printMove(const msBoard::Move *m) {
+void msBoard::Move::print() {
         // Extract destination row/col
         int destRow = -1, destCol = -1;
         for (int r = 0; r < NUM_ROWS; r++) {
             for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
-                if ((m->setBit >> bitIndex(r, c)) & 1ULL) {
+                if ((setBit >> bitIndex(r, c)) & 1ULL) {
                     destRow = r;
                     destCol = c;
                 }
@@ -586,7 +607,7 @@ void printMove(const msBoard::Move *m) {
 
         for (int r = 0; r < NUM_ROWS; r++) {
             for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
-                if ((m->clearBits >> bitIndex(r, c)) & 1ULL) {
+                if ((clearBits >> bitIndex(r, c)) & 1ULL) {
                     // Decide which is origin vs jumped
                     if ((std::abs(r - destRow) == 2 && c == destCol) ||
                         (std::abs(c - destCol) == 2 && r == destRow)) {
