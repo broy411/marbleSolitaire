@@ -5,6 +5,8 @@
 #include <cstring>
 #include <stdexcept>
 #include <assert.h>
+#include "configuration.h"
+
 
 #ifndef MSBITMAP_H_
 #define MSBITMAP_H_
@@ -33,6 +35,9 @@ class msBitmap {
         bitmap = static_cast<uint64_t*>(ptr); 
 
     } 
+    void clear() {
+        std::memset((void *)bitmap, 0, (sizeBits + 63) / 64 * 8); 
+    }
     ~msBitmap() 
     {
         size_t words = (sizeBits + 63) / 64;

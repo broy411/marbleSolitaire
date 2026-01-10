@@ -11,6 +11,8 @@
 *     solution to their current board at any time (if one exists). 
 */
 
+
+
 #include <chrono>
 
 #include "msGame.h"
@@ -28,13 +30,16 @@
 #include <array>
 #include <algorithm>
 
+
+#include "configuration.h"
+
 #include <sys/mman.h>
 #include <cstdint>
 #include <cstring>
 #include <stdexcept>
-#include <vector>
-#include <stack>
 
+#include <stack>
+#include <sstream>
 
 /* 
 This file is documented for programmers, not users
@@ -72,9 +77,11 @@ namespace {
         msBoard board;
         size_t moveIndex;
         size_t moveEnd;
-        size_t movesStart;  
+        size_t movesStart;   
 
-        const msBoard::Move *incomingMove; 
+        std::vector<msBoard::Rotation> transforms;
+
+        std::optional<msBoard::Move> incomingMove; // optional
     };
 
     /***************************  Enum and Constants: *************************/
@@ -82,17 +89,23 @@ namespace {
 
     constexpr uint64_t BIT_COUNT  = 1ULL << 37;
 
-    const int INIT_SEEN_SIZE = 3000000;
+    const int INIT_SEEN_SIZE = 8000000;
     
     const int INIT_MOVES_SIZE = 64;
     const int START_MOVE_IDX = 0;
     const int FIRST_MOVE_IDX = 0;
 
     /************************  Function declarations: *************************/
-    bool solvable(msBoard startBoard);
-
+    std::vector<msBoard::Move> solvable(msBoard startBoard);
+    std::vector<msBoard::Move> getMoveOrder(std::stack<StackFrame> dfs);
     /***************************** Functions: ********************************/
     
+
+    struct IdentityHash {
+        size_t operator()(uint64_t key) const {
+            return key;
+        }
+    };
 
     /************ solvable *********
      checks whether a given board has a solution or not
@@ -104,104 +117,145 @@ namespace {
     Expects: 
         board should be structured correctly for accurate results
     *********************************/
-    bool solvable(msBoard startBoard) 
-    {
 
-        // Shared move buffer (pointers into ALL_MOVES)
-        std::vector<const msBoard::Move*> moves;
+    int ct = 0;
+    std::vector<msBoard::Move> solvable(msBoard startBoard) 
+    {
+        static msBitmap<msBoard, decltype(&msBoard::boardToBits)>* bits = nullptr;
+        std::vector<msBoard::Rotation> transforms;
+        std::vector<msBoard::Move> moves;
         void *seen;
 
         if (HAVE_16GB_RAM) {
-            msBitmap<msBoard, decltype(&msBoard::boardToBits)>* tmp =
-                new msBitmap<msBoard, decltype(&msBoard::boardToBits)>
-                            (BIT_COUNT, &msBoard::boardToBits);
-            seen = tmp; // seen = an msBitmap
+            if (bits == nullptr) {
+                bits = new msBitmap<msBoard, decltype(&msBoard::boardToBits)>
+                                            (BIT_COUNT, &msBoard::boardToBits);
+            }
+            bits->clear();
+            seen = bits;
         } else {
-            seen = new robin_hood::unordered_flat_set<uint64_t>;
-            ((robin_hood::unordered_flat_set<uint64_t> *)seen)->
-                reserve(INIT_SEEN_SIZE);
+            auto tmpSet = new robin_hood::unordered_flat_set<uint64_t, IdentityHash>;
+            tmpSet->reserve(INIT_SEEN_SIZE);
+            seen = tmpSet;
+            // auto tmpSet = new ankerl::unordered_dense::set<uint64_t>;
+            tmpSet->reserve(INIT_SEEN_SIZE);
+            seen = tmpSet;
         }
 
-        auto t0 = std::chrono::high_resolution_clock::now();
         moves.reserve(INIT_MOVES_SIZE);
-
         std::stack<StackFrame> dfs;
 
-        startBoard = startBoard.getCanonicalBoard();
-
-        startBoard.printBoard();
-
-        startBoard.validMoves(moves); // initial possible move
-        
-        dfs.push({ startBoard, START_MOVE_IDX, moves.size(), FIRST_MOVE_IDX, 
-                   nullptr });
+        auto [startCanonical, startTransform] = startBoard.getCanonicalBits();
+        if (startTransform != msBoard::DEGREE_0) {
+            transforms.push_back(startTransform);
+        }
+        startCanonical.validMoves(moves);
+        dfs.emplace(StackFrame{ startCanonical, START_MOVE_IDX, moves.size(), 
+                                FIRST_MOVE_IDX, transforms, 
+                                std::nullopt });
 
         while (!dfs.empty()) {
             StackFrame &top = dfs.top();
-
+            ct++;
             if (top.moveIndex >= top.moveEnd) {
-                moves.resize(top.movesStart);  
+                moves.reserve(top.movesStart);
                 dfs.pop();
                 continue;
             }
 
-            const msBoard::Move *m = moves[top.moveIndex++];
+            const msBoard::Move m = moves[top.moveIndex++];
             msBoard nextBoard = top.board.applyMove(m);
 
-            // if (__builtin_popcountll(nextBoard) >= 8) // less than 15 moves from root 
-            nextBoard = nextBoard.getCanonicalBoard();
+            auto [canonical, transform] = nextBoard.getCanonicalBits();
+
 
             if (HAVE_16GB_RAM) {
-                if (((msBitmap<msBoard, decltype(&msBoard::boardToBits)>*) seen)
-                                                ->testAndSetBit(nextBoard)) {
+                if (((msBitmap<msBoard, decltype(&msBoard::boardToBits)>*)seen)
+                                        ->testAndSetBit(canonical)) {
                     continue;
                 }
-            } else { 
-                if (!(((robin_hood::unordered_flat_set<uint64_t> *)seen)->
-                        insert(nextBoard.boardToBits()).second)) {
+            } else {
+                if (!(((robin_hood::unordered_flat_set<uint64_t, IdentityHash>*)seen)
+                        ->insert(canonical.boardToBits()).second)) {
                     continue;
                 }
             }
-            
+
             if (nextBoard.hasWon()) {
+                // cout << ((robin_hood::unordered_flat_set<uint64_t, IdentityHash>*)seen)->size() << endl;;
                 if (!HAVE_16GB_RAM) 
-                    delete (robin_hood::unordered_flat_set<uint64_t> *)seen;
-                
-                
-                std::vector<const msBoard::Move*> solution;
-                // getMoveOrder();
-                std::stack<StackFrame> tmp = dfs;
-                while (!tmp.empty()) {
-                    const StackFrame& f = tmp.top();
-                    if (f.incomingMove)
-                        solution.push_back(f.incomingMove);
-                    tmp.pop();
-                }
-
-                std::reverse(solution.begin(), solution.end());
-
-                // solution now contains the exact move sequence
-                // for (const msBoard::Move* mv : solution) {
-                //     msBoard::printMove(mv);
-                // }
-                auto t1 = std::chrono::high_resolution_clock::now();
-                std::cout << std::chrono::duration<double>(t1 - t0).count() << "\n";
-
-                return true;
+                    delete (robin_hood::unordered_flat_set<uint64_t, IdentityHash>*)seen;
+                // else delete (msBitmap<msBoard, decltype(&msBoard::boardToBits)> *)seen;
+                return getMoveOrder(dfs);  
             }
 
-            // Generate moves for next step
+            // Generate moves for the next step
             size_t start = moves.size();
-            nextBoard.validMoves(moves);
-            size_t end = moves.size(); // now has more moves
+            canonical.validMoves(moves);
+            size_t end = moves.size();
+            std::vector<msBoard::Rotation> newTrans = top.transforms;
+            if (transform != msBoard::DEGREE_0) {
+                newTrans.push_back(transform);
+            }
 
-            dfs.push({ nextBoard, start, end, start, m });
+            dfs.emplace(StackFrame{ canonical, start, end, start, newTrans, m });
         }
-        return false;
+
+        return {};
     }
 
-}
 
+    /************ getMoveOrder *********
+     Takes the stack from our dfs solvable algorithm and retrieves the move 
+     order that solved the board
+    
+    Parameters: 
+        std::stack<StackFrame> stack - contains the entire stack that we used
+                                       during the solvable algorithm
+    Returns: 
+        A std::vector<msBoard::Move> that contains all the moves needed to solve
+        the original board given to function solvable
+    *********************************/
+    std::vector<msBoard::Move> getMoveOrder(std::stack<StackFrame> stack) {
+        std::vector<msBoard::Move> revSolution;
+        std::vector<std::vector<msBoard::Rotation>> transforms;
+        msBoard dummy;
+        
+        // Convert stack to vector so we can access previous elements
+        std::vector<StackFrame> frames;
+        while (!stack.empty()) {
+            frames.push_back(stack.top());
+            stack.pop();
+        }
+        // Collect moves with the PARENT's transforms
+        for (size_t i = 0; i < frames.size(); i++) {
+            if (frames[i].incomingMove) {
+                revSolution.push_back(*frames[i].incomingMove);
+                
+                // Use the parent frame's transforms (i+1 since we popped in reverse)
+                if (i + 1 < frames.size()) {
+                    transforms.push_back(frames[i + 1].transforms);
+                } else {
+                    // First frame has no parent, use empty transforms
+                    transforms.push_back(std::vector<msBoard::Rotation>());
+                }
+            }
+        }
+        
+        for (size_t i = 0; i < revSolution.size(); i++) {
+            msBoard::Move curr = revSolution[i];
+            for (int j = transforms[i].size() - 1; j >= 0; j--) {  
+                dummy.undoTransform(curr, transforms[i][j]);
+            }
+            revSolution[i] = curr;
+        }
+        
+        // Reverse to get forward solution
+        std::reverse(revSolution.begin(), revSolution.end());
+        return revSolution;
+    }
+    
+}
 /************ msGame *********
  Constructor for the msGame class
  
@@ -215,7 +269,9 @@ Notes:
 *********************************/
 msGame::msGame() 
 {
-    board = new msBoard(msBoard::DEFAULT);
+    board = msBoard(msBoard::DEFAULT);
+    // bits = new msBitmap<msBoard, decltype(&msBoard::boardToBits)>
+    //                     (BIT_COUNT, &msBoard::boardToBits);
 }
 
 /************ ~msGame *********
@@ -231,14 +287,187 @@ Notes:
 *********************************/
 msGame::~msGame() 
 {
-    assert(board != nullptr);
-    delete board;
+    // assert(board != nullptr);
+    // delete board;
+    // delete bits;
 }
+
 
 void msGame::playGame() 
 {
-    board->printBoard();
+    // board.printBoard();
+    auto time1 = std::chrono::high_resolution_clock::now();
+    std::vector<msBoard::Move> solution = solvable(board);
+    // for (msBoard::Move m : solution) {
+    //     m.print();
+    // }
+    auto time2 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed = time2 - time1;
+    // cout << getBestMove() << endl;
+    std::cout << "we went through " << ct << " stack frames in " << 
+            elapsed.count() << " seconds" << std::endl;
 
+    // std::cout << solvable(board) << std::endl;
+}
+
+
+/**************** getBestMove ***************
+ Returns a std::string containing a move that leads to a solved board
+
+ Parameters: none
+ Returns: MoveInfo (string) structured as row col Direction
+           e.g. "0 4 left"
+          Will return an empty string if board is unsolvable
+ Expects: nothing
+ Notes: May take several seconds to run - must solve whole board
+ ********************************************/
+msGame::MoveInfo msGame::getBestMove() const
+{
+    std::vector<msBoard::Move> solution = solvable(board);
+
+    if (solution.empty()) return "";
+    return solution.front().toString();
+}
+
+
+/**************** getBoard ***************
+ Puts the board into the provided ostream in the msBoard format
+
+ Parameters: 
+    std::ostream &stream - a reference to the output stream we put the board in
+ Expects: nothing
+ Notes: check msBoard class for how the board is outputted
+ ********************************************/
+void msGame::getBoard(std::ostream &stream) const
+{
+    board.printBoard(stream);
+}
+
+/**************** isValidMove ***************
+ Checks to see if a given move is legal on the board
+
+ Parameters: 
+    unsigned row  - the row of the marble to be moved
+    unsigned col  - the column of the marble to be moved
+    Direction dir - the direction to move the selected marble in
+ Returns: bool - true if and only if the move is possible on the current board
+ Expects: row and col should be valid and correspond to a marble
+          dir should make it a valid move
+ Notes: Relies on msBoard's function to check move validity
+ ********************************************/
+bool msGame::isValidMove(unsigned row, unsigned col, Direction dir) const
+{
+    int destRow, destCol;
+
+    destRow = (dir == UP)  ? (int)row - 2 : (dir == DOWN)  ? row + 2 : row;
+    destCol = (dir == LEFT)? (int)col - 2 : (dir == RIGHT) ? col + 2 : col;
+
+    return board.isValidMove(row, col, (unsigned) destRow, (unsigned) destCol);
+}
+
+
+/**************** makeMove ***************
+ Executes a move on the board
+
+ Parameters: 
+    unsigned row  - the row of the marble to be moved
+    unsigned col  - the column of the marble to be moved
+    Direction dir - the direction to move the selected marble in
+ Returns: bool - true if and only if the move was successfully executed
+ Expects: row and col should be valid and correspond to a marble
+          dir should make it a valid move
+ Notes: Errors thrown from msBoard are caught
+        This function only checks that the moves 
+ ********************************************/
+bool msGame::makeMove(unsigned row, unsigned col, Direction dir)
+{
+    if (!isValidMove(row, col, dir)) {
+        return false;
+    }
     
-    std::cout << solvable(*board) << std::endl;
+    int destRow = (dir == UP)   ? (int)row - 2 : (dir == DOWN)  ? row + 2 : row;
+    int destCol = (dir == LEFT) ? (int)col - 2 : (dir == RIGHT) ? col + 2 : col;
+
+    try { // extra safety check - should not need given isValidMoves()
+        msBoard::Move move = board.getAMove(row, col, destRow, destCol);
+        board = board.applyMove(move);
+        moveHistory.push_back(move);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+/**************** hasMoves ***************
+ Checks to see if there are any valid moves to be made on the current board
+
+ Parameters: none
+ Returns: a bool - true if and only if there are legal moves on the board
+ Expects: nothing
+ ********************************************/
+bool msGame::hasMoves() const
+{
+    std::vector<msBoard::Move> m;
+    board.validMoves(m);
+
+    return !m.empty();
+}
+
+/**************** hasWon ***************
+ Returns whether the game is in a winning position (1 marble left) or not
+
+ Parameters: none
+ Returns: a bool - true if and only if the board is in winning position
+ Expects: nothing
+ ********************************************/
+bool msGame::hasWon() const
+{
+    return board.hasWon();
+}
+
+/**************** undoMove ***************
+ Undoes the last move made on the board
+
+ Parameters: none
+ Returns: a bool - true if and only if there was a move to undo
+ Expects: nothing
+ ********************************************/
+bool msGame::undoMove() 
+{
+    if (moveHistory.empty()) {
+        return false;
+    }
+    msBoard::Move lastMove = moveHistory.back();
+    moveHistory.pop_back();
+    board = board.undoMove(lastMove);
+    return true;
+}
+
+/**************** getSolution ***************
+ Returns the solution to the current board's state
+
+ Parameters: none
+ Returns: a string with each move formatted as row col direction, where row and
+          col are 0-indexed and direction is either up, down, left, or right.
+          Each move is separated by a newline in the string. It returns "No
+          solution exists." if the board is unsolvable
+ Expects: nothing
+ Notes:  none
+ ********************************************/
+msGame::MoveInfo msGame::getSolution()
+{
+    std::vector<msBoard::Move> solution = solvable(board);
+    std::stringstream moves;
+
+    if (solution.empty()) return "No solution exists.";
+    for (msBoard::Move m : solution) {
+        moves << m.toString() << std::endl;
+    }
+    return moves.str();
+}
+
+void msGame::useCustomBoard(unsigned row, unsigned col) 
+{
+    board = msBoard(row, col);
+    moveHistory.clear();
 }

@@ -9,7 +9,9 @@
     implement Marble Solitaire.
 
 */
-#include <immintrin.h>
+
+#include <string>
+#include "configuration.h"
 #include "msBoard.h"
 #include <array>
 #include <algorithm>
@@ -27,6 +29,9 @@
 #include <cstring>
 #include <stdexcept>
 
+#if HAVE_PEXT 
+    #include <immintrin.h> 
+#endif
 
 
 
@@ -77,23 +82,18 @@ using Column = uint8_t;
 // ALL_MOVES stores every possible move to be made on the board
 const std::vector<msBoard::Move> msBoard::ALL_MOVES = msBoard::setupAllMoves();
 
-
+uint64_t boardToBits1(Board b) ;
 
 // Anonymous Namespace:
 namespace {
     /*************************** Enum and Constants ***************************/
-    /*
-      Most boards have 8 equivalent states - one for each rotation / mirroring
-    */
-    enum Rotation {
-        DEGREE_90 = 0, DEGREE_180, DEGREE_270,
-        FLIP_H, FLIP_V, FLIP_DIAG, FLIP_ANTI
-    };
-    constexpr int NUM_ROTATIONS = 7;
+
+    constexpr int NUM_ROTATIONS = 8;
 
     constexpr int NUM_ROWS = 7;
     constexpr int NUM_COLS = 7;
     constexpr int MAX_ROW = NUM_ROWS - 1;
+    constexpr int MAX_COL = NUM_COLS - 1;
     constexpr int MAX_BOARD_IDX = 63;
 
 
@@ -106,7 +106,7 @@ namespace {
                                                {0,1,1,1,1,1,0},
                                                {0,0,1,1,1,0,0}
                                               };
-    #define ROW_IDX(r) (MAX_BOARD_IDX - (r) * 7)
+    #define ROW_IDX(r) (MAX_BOARD_IDX - ((r) * NUM_COLS))
     constexpr int rowShift[NUM_ROWS] = {
                                         ROW_IDX(0) - (NUM_COLS - 1),
                                         ROW_IDX(1) - (NUM_COLS - 1),
@@ -118,8 +118,9 @@ namespace {
                                        };
 
     // const uint64_t DEFAULT_BOARD =    0x18FBFFFFEF8E0000; // - empty (0, 2) .14 fastest, .34rn
-    const Board DEFAULT_BOARD =    0x38FBFFFEEF8E0000; // - empty (2,3) 63s -> 56 -> 43 (w O3) -> 25 (w 16GiB) -> 25 (w REVERSED - others got faster)
-//     const uint64_t DEFAULT_BOARD =    0x38DBFFFFEF8E0000; // - empty (1, 3) 1.47s
+    // const Board DEFAULT_BOARD = 0x38FBFFFEEF8E0000; // - empty (2,3) 63s -> 56 -> 43 (w O3) -> 25 (w 16GiB) -> 25 (w REVERSED - others got faster)
+    const Board DEFAULT_BOARD =    0x38DBFFFFEF8E0000; // - empty (1, 3) 1.47s
+    const Board FULL_BOARD =       0x38FBFFFFEF8E0000;
     const Board EMPTY_BOARD = 0ULL;
 
 
@@ -196,7 +197,7 @@ namespace {
         Will CRE if row or col >= 7
     *********************************/
     inline unsigned bitIndex(unsigned r, unsigned c) {
-        return MAX_BOARD_IDX - (r * NUM_COLS + c);
+        return ROW_IDX(r) - c;
     }
 
 
@@ -289,7 +290,6 @@ namespace {
 
     std::array<Board, NUM_COLS> getColMasks()
     {
-	std::cout << HAVE_PEXT << std::endl;
         std::array<Board, NUM_COLS> masks;
         for (int c = 0; c < NUM_COLS; c++) {
             masks[c] = (1ULL << (ROW_IDX(0) - c)) |
@@ -392,9 +392,6 @@ Notes:
 *********************************/
 msBoard::msBoard(BoardType bt) 
 {
-    std::cout << std::bitset<8>((Column)_pext_u64(DEFAULT_BOARD, COL_MASKS[3])) << std::endl;
-
-
     if (bt == DEFAULT) {
         board = DEFAULT_BOARD;
     } else if (bt == EMPTY) {
@@ -403,7 +400,24 @@ msBoard::msBoard(BoardType bt)
         assert(1 == 0);
     }
 }
-msBoard::~msBoard() {}
+msBoard::msBoard()
+{
+    board = DEFAULT_BOARD;
+}
+msBoard::msBoard(unsigned row, unsigned col) 
+{
+    if (row > MAX_ROW || col > MAX_COL || !PLAYABLE[row][col]) {
+        board = DEFAULT_BOARD;
+    } else {
+        board = FULL_BOARD;
+        printBoard(std::cout);
+        Board mask = Board(1) << (bitIndex(row, col));
+        board &= ~mask;
+    }
+}
+msBoard::~msBoard() {
+
+}
 
 /************ hasWon *********
  Checks whether a given board is in a winning position
@@ -436,15 +450,24 @@ Expects:
 Notes:
     Appends (does not clear) valid moves for this board to moves
 *********************************/
-void msBoard::validMoves(std::vector<const msBoard::Move*> &moves) const 
+void msBoard::validMoves(std::vector<msBoard::Move> &moves) const 
 {
-
-    for (const Move &m : ALL_MOVES) {
-        if (((board & m.clearBits) == m.clearBits) &&
-            ((board & m.setBit) == 0)) {
-            moves.push_back(&m);
-        }
+    const Board occupied = board;
+    const Board empty = ~board;
+    
+    // Unroll the loop and remove branches
+    for (const Move& m : ALL_MOVES) {
+        // Branchless: both conditions must be true
+        const bool valid = ((occupied & m.clearBits) == m.clearBits) & 
+                          ((empty & m.setBit) == m.setBit);
+        if (valid) moves.push_back(m);
     }
+    // for (const Move m : ALL_MOVES) {
+    //     if (((board & m.clearBits) == m.clearBits) &&
+    //         ((board & m.setBit) == 0)) {
+    //         moves.push_back(m);
+    //     }
+    // }
 }
 
 /************ applyMove *********
@@ -457,15 +480,13 @@ Parameters:
 Returns: 
     A new Board that is unchanged except for the applied move
 Expects: 
-    m is a valid move and is not a nullptr
+    m is a valid move
 Notes:
-    Will CRE if m is nullptr
-*********************************/
- msBoard msBoard::applyMove(const msBoard::Move *m) const 
- {
-    assert(m != nullptr);
 
-    Board next = (board | m->setBit) & ~(m->clearBits);
+*********************************/
+ msBoard msBoard::applyMove(const msBoard::Move m) const 
+ {
+    Board next = (board | m.setBit) & ~(m.clearBits);
     return msBoard(next);
 }
 
@@ -504,6 +525,31 @@ uint64_t msBoard::boardToBits() const
 
         return ret;
 }
+uint64_t boardToBits1(Board b)  
+{
+        Board ret = EMPTY_BOARD;
+
+        /*
+          - Shift b by however many bits until end of row
+          - Add however many bits that row has to MSB-side of ret
+          - Repeat for each row
+          This gives us all the bits of the playable boardspace
+        */
+        b >>= 17;
+        ret |= (b & 0x7); // ret has 3 bits
+        b >>= 6;
+        ret |= (b & 0x1F) << 3; // ret has 8 bits
+        b >>= 6;
+        ret |= (b & 0x1FFFFF) << 8; // ret has 29 bits
+        b >>= 22;
+        ret |= (b & 0x1F) << 29; // ret has 34 bits
+        b >>= 8;
+        ret |= (b & 0x7) << 34; // ret has 37 bits
+
+        return ret;
+}
+
+#define TO_STRING(bit) ((bit) ? "●" : ".")
 
 /****************** printBoard ********************
  Prints an msboard as a 7x7 grid of 1s and 0s 
@@ -514,15 +560,19 @@ Returns: void
 Notes:
     Outputs to stdout
 ***************************************************/
-void msBoard::printBoard() const 
+void msBoard::printBoard(std::ostream &stream) const 
 {
+    stream << "   " << 0 << " " << 1 << " " << 2 << " " << 3 << " " << 4 
+              << " " << 5 << " " << 6 << '\n';
     for (int r = 0; r < NUM_ROWS; r++) {
-        if (r == 0 || r == 6) std::cout << "  ";
-        if (r == 1 || r == 5) std::cout << " ";
+        stream << r << "  ";
+        if (r == 0 || r == 6) stream << "    ";
+        if (r == 1 || r == 5) stream << "  ";
         for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
-            std::cout << getBit(board, r, c);
+            stream << TO_STRING(getBit(board, r, c));
+            if (c < COL_END_IDX[r]) stream << " ";
         }
-        std::cout << "\n";
+        stream << "\n";
     }
 }
 
@@ -557,6 +607,108 @@ Expects:
 Notes:
     Will return ill-formatted board if b is structured improperly
 ****************************************/
+std::pair<msBoard, msBoard::Rotation> msBoard::getCanonicalBits() const
+{
+
+    Board best = board;
+    Rotation bestTransform = DEGREE_0;
+    
+    // Pre-extract rows and columns ONCE (avoid repeated shifts)
+    Row rows[NUM_ROWS];
+    Column cols[NUM_COLS];
+    for (int i = 0; i < NUM_ROWS; i++) {
+        rows[i] = getRow(board, i);
+        cols[i] = getCol(board, i);
+    }
+    
+    // Build each transformation inline (avoid array initialization)
+    Board candidate;
+    
+    // DEGREE_90
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)REVERSED[cols[i]] << rowShift[i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = DEGREE_90; }
+    
+    // DEGREE_180
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)REVERSED[rows[i]] << rowShift[MAX_ROW - i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = DEGREE_180; }
+    
+    // DEGREE_270
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)cols[i] << rowShift[MAX_ROW - i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = DEGREE_270; }
+    
+    // FLIP_H
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)REVERSED[rows[i]] << rowShift[i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = FLIP_H; }
+    
+    // FLIP_V
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)rows[i] << rowShift[MAX_ROW - i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = FLIP_V; }
+    
+    // FLIP_DIAG
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)cols[i] << rowShift[i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = FLIP_DIAG; }
+    
+    // FLIP_ANTI
+    candidate = EMPTY_BOARD;
+    for (int i = 0; i < NUM_ROWS; i++) {
+        candidate |= (Board)REVERSED[cols[i]] << rowShift[MAX_ROW - i];
+    }
+    if (candidate < best) { best = candidate; bestTransform = FLIP_ANTI; }
+    
+    return { msBoard(best), bestTransform };
+
+    // Identity rotation
+    // Board best = board;
+    // Rotation bestTransform = DEGREE_0;
+    // Board boards[NUM_ROTATIONS] = { board, EMPTY_BOARD, EMPTY_BOARD, 
+    //                                 EMPTY_BOARD, EMPTY_BOARD, EMPTY_BOARD, 
+    //                                 EMPTY_BOARD, EMPTY_BOARD };
+
+    // for (int i = 0; i < NUM_ROWS; i++) {
+    //     Row row = getRow(board, i);
+    //     Column col = getCol(board, i);
+
+    //     boards[DEGREE_90]  = insertRow(boards[DEGREE_90],  i, REVERSED[col]);
+    //     boards[DEGREE_180] = insertRow(boards[DEGREE_180], MAX_ROW - i, 
+    //                                                             REVERSED[row]);
+    //     boards[DEGREE_270] = insertRow(boards[DEGREE_270], MAX_ROW - i, 
+    //                                                                     col);
+    //     boards[FLIP_H]     = insertRow(boards[FLIP_H],     i, REVERSED[row]);
+    //     boards[FLIP_V]     = insertRow(boards[FLIP_V],     MAX_ROW - i, 
+    //                                                                     row);
+    //     boards[FLIP_DIAG]  = insertRow(boards[FLIP_DIAG],  i, col);
+    //     boards[FLIP_ANTI]  = insertRow(boards[FLIP_ANTI],  MAX_ROW - i, 
+    //                                                             REVERSED[col]);
+    // }
+
+
+    // for (int i = 0; i < NUM_ROTATIONS; i++) {
+    //     if (boards[i] < best) {
+    //         best = boards[i];
+    //         bestTransform = Rotation(i);
+    //     }
+    // }
+    // // std::cout << "The best transform for board was " << bestTransform << std::endl;
+    // return { msBoard(best), bestTransform };
+}
 msBoard msBoard::getCanonicalBoard() const
 {
     // Identity rotation
@@ -587,8 +739,8 @@ msBoard msBoard::getCanonicalBoard() const
     }
     return msBoard(best);
 }
-
-void msBoard::Move::print() {
+std::string msBoard::Move::toString() const
+{
         // Extract destination row/col
         int destRow = -1, destCol = -1;
         for (int r = 0; r < NUM_ROWS; r++) {
@@ -630,6 +782,171 @@ void msBoard::Move::print() {
         else if (originCol == destCol && originRow - 2 == destRow) dir = "up";
         else dir = "unknown";
 
-        std::cout << "(" << originRow << "," << originCol << ") -> ("
-                << destRow << "," << destCol << ") " << dir << std::endl;
+return  std::to_string(originRow) + " " + std::to_string(originCol) +  " "
+      + dir;
+
+    
+}
+void msBoard::Move::print() const {
+        // Extract destination row/col
+        int destRow = -1, destCol = -1;
+        for (int r = 0; r < NUM_ROWS; r++) {
+            for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
+                if ((setBit >> bitIndex(r, c)) & 1ULL) {
+                    destRow = r;
+                    destCol = c;
+                }
+            }
+        }
+
+        // Extract origin and jumped bits
+        int originRow = -1, originCol = -1;
+        int jumpedRow = -1, jumpedCol = -1;
+
+        for (int r = 0; r < NUM_ROWS; r++) {
+            for (int c = COL_START_IDX[r]; c <= COL_END_IDX[r]; c++) {
+                if ((clearBits >> bitIndex(r, c)) & 1ULL) {
+                    // Decide which is origin vs jumped
+                    if ((std::abs(r - destRow) == 2 && c == destCol) ||
+                        (std::abs(c - destCol) == 2 && r == destRow)) {
+                        originRow = r;
+                        originCol = c;
+                    } else {
+                        jumpedRow = r;
+                        jumpedCol = c;
+                    }
+                }
+            }
+        }
+        (void) jumpedCol;
+        (void) jumpedRow;
+
+        // Determine direction
+        std::string dir;
+        if (originRow == destRow && originCol + 2 == destCol) dir = "right";
+        else if (originRow == destRow && originCol - 2 == destCol) dir = "left";
+        else if (originCol == destCol && originRow + 2 == destRow) dir = "down";
+        else if (originCol == destCol && originRow - 2 == destRow) dir = "up";
+        else dir = "unknown";
+
+        std::cout << originRow << " " << originCol << " "  << dir << std::endl;
     }
+
+bool msBoard::isValidMove(int row, int col, int toRow, int toCol) const
+{
+    
+    int rowDif = std::abs(row - toRow);
+    int colDif = std::abs(col - toCol);
+
+
+    if (toRow > MAX_ROW || toRow < 0 || toCol > MAX_COL || toCol < 0) {
+        return false;
+    }
+    // source or destination is unplayable --> false
+    if (!PLAYABLE[row][col] || !PLAYABLE[toRow][toCol]) {
+        return false;
+    }
+    // move exactly 2 in one axis and 0 in the other
+    if (!((rowDif == 2 && colDif == 0) || (rowDif == 0 && colDif == 2))) {
+        return false;
+    }
+    // source must be a marble and destination must be empty
+    if (!getBit(board, row, col) || getBit(board, toRow, toCol)) {
+        return false;
+    }
+
+    // return if the middle position has a marble or not
+    int midRow = (row + toRow) / 2;
+    int midCol = (col + toCol) / 2;
+
+    return getBit(board, midRow, midCol);
+}
+msBoard::Move msBoard::getAMove(int row, int col, int toRow, int toCol) const
+{
+    if (!isValidMove(row, col, toRow, toCol)) {
+        throw std::runtime_error("Cannot get an invalid move\n");
+    }
+
+    int midRow = (row + toRow) / 2;
+    int midCol = (col + toCol) / 2;
+
+    Board set =   1ULL << bitIndex(toRow, toCol);
+    Board clear = 1ULL << bitIndex(row, col);
+    
+    clear |=      1ULL << bitIndex(midRow, midCol);
+
+    return msBoard::Move(set, clear);
+
+
+}
+
+
+void msBoard::undoTransform(Move &m, Rotation rot) const {
+    if (rot == DEGREE_0) {
+        return;
+    }
+    
+    Board transformedSetBit = EMPTY_BOARD;
+    Board transformedClearBits = EMPTY_BOARD;
+    
+    for (int i = 0; i < NUM_ROWS; i++) {
+        Row row_set = getRow(m.setBit, i);
+        Row row_clear = getRow(m.clearBits, i);
+        Column col_set = getCol(m.setBit, i);
+        Column col_clear = getCol(m.clearBits, i);
+        
+        switch (rot) {
+            case DEGREE_90:  // Inverse: rotate 270° (or 90° CCW)
+                transformedSetBit = insertRow(transformedSetBit, MAX_ROW - i, col_set);
+                transformedClearBits = insertRow(transformedClearBits, MAX_ROW - i, col_clear);
+                break;
+                
+            case DEGREE_180:  // Inverse: rotate 180° (same as forward)
+                transformedSetBit = insertRow(transformedSetBit, MAX_ROW - i, REVERSED[row_set]);
+                transformedClearBits = insertRow(transformedClearBits, MAX_ROW - i, REVERSED[row_clear]);
+                break;
+                
+            case DEGREE_270:  // Inverse: rotate 90° (or 270° CCW)
+                transformedSetBit = insertRow(transformedSetBit, i, REVERSED[col_set]);
+                transformedClearBits = insertRow(transformedClearBits, i, REVERSED[col_clear]);
+                break;
+                
+            case FLIP_H:  // Inverse: flip horizontal again (involution)
+                transformedSetBit = insertRow(transformedSetBit, i, REVERSED[row_set]);
+                transformedClearBits = insertRow(transformedClearBits, i, REVERSED[row_clear]);
+                break;
+                
+            case FLIP_V:  // Inverse: flip vertical again (involution)
+                transformedSetBit = insertRow(transformedSetBit, MAX_ROW - i, row_set);
+                transformedClearBits = insertRow(transformedClearBits, MAX_ROW - i, row_clear);
+                break;
+                
+            case FLIP_DIAG:  // Inverse: flip diagonal again (involution)
+                transformedSetBit = insertRow(transformedSetBit, i, col_set);
+                transformedClearBits = insertRow(transformedClearBits, i, col_clear);
+                break;
+                
+            case FLIP_ANTI:  // Inverse: flip anti-diagonal again (involution)
+                transformedSetBit = insertRow(transformedSetBit, MAX_ROW - i, REVERSED[col_set]);
+                transformedClearBits = insertRow(transformedClearBits, MAX_ROW - i, REVERSED[col_clear]);
+                break;
+                
+            case DEGREE_0:
+                return;
+        }
+    }
+    
+    m = Move(transformedSetBit, transformedClearBits);
+ }
+msBoard msBoard::undoMove(const Move m) const 
+{
+    Board next = (board & ~m.setBit) | m.clearBits;
+    return msBoard(next);
+}
+
+int msBoard::numRows() const {
+    return NUM_ROWS;
+}
+int msBoard::numCols() const {
+    return NUM_COLS;
+}

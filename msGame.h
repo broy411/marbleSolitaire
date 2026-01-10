@@ -4,38 +4,42 @@
 #include <array>
 #include <cstdint>
 #include "msBoard.h"
+#include "msBitmap.h"
 
-using namespace std;
 
 #ifndef MSGAME_H
 #define MSGAME_H
 
 class msGame {
-    /* 
-       If your computer has 16GiB of RAM available to use, set this to 1. The 
-       typical speedup with it enabled is about 1.75x, but set it 0 if space is 
-       unavailable. That said, there is a small overhead cost of allocating
-       the memory of ~0.5s
-    */
-    #define HAVE_16GB_RAM 0
+
     
     public:
+
+        enum Direction { UP, DOWN, LEFT, RIGHT };
         // structured as "(row, col) -> up | down | left | right"
-        using Move = string; 
+        using MoveInfo = std::string; 
 
         msGame();
         ~msGame();
         
         void playGame();
 
-        Move getBestMove();
-        Move getSolution();
-        void makeMove();
-        void useCustomBoard();
-        void useDefaultBoard();
+        void getBoard(std::ostream &stream) const;
+        MoveInfo getBestMove() const ;
+        MoveInfo getSolution();
+        bool isValidMove(unsigned row, unsigned col, Direction dir) const;
+        bool makeMove(unsigned row, unsigned col, Direction dir);
+        bool undoMove();
+        bool hasMoves() const;
+        bool hasWon() const;
+        void useCustomBoard(unsigned row, unsigned col);
+
+        
 
     private:
-        msBoard *board;
+        msBoard board;
+
+        std::vector<msBoard::Move> moveHistory;
 };
 
 #endif

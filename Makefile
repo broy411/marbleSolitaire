@@ -5,7 +5,7 @@
 #########################################################
 
 CXX      = clang++
-CXXFLAGS = -g -O3 -Wall -Wextra -Wpedantic -Wshadow -std=c++17 -mbmi2
+CXXFLAGS = -g -O3 -Wall -Wextra -Wpedantic -Wshadow -std=c++17
 
 # This rule builds msGame executable
 # The $^ refers to all the object files listed as dependencies
