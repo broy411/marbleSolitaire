@@ -3,6 +3,7 @@ msGame
 *.o
 *.dSYM/
 *.d
+msGameOld
 
 # macOS system files
 .DS_Store
