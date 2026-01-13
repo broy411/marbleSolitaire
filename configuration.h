@@ -2,7 +2,7 @@
        If your computer has 16GiB of RAM available to use, set this to 1. The 
        typical speedup with it enabled is about 1.75x, but set it 0 if space is 
        unavailable. That said, there is a small overhead cost of allocating
-       the memory of ~0.5s
+       the memory of ~0.5s. 
     */
     #define HAVE_16GB_RAM 0
 
