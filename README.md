@@ -1,4 +1,4 @@
-#Marble Solitaire Solver
+# Marble Solitaire Solver
 
 A high-performance C++ implementation of Marble (Peg) Solitaire with a full DFS-based solver, symmetry reduction, and bit-level board representation.
 
@@ -9,11 +9,11 @@ This project allows:
 - Automatic solving of arbitrary board states (when a solution exists)
 - Canonicalization of board states via rotations and reflections to aggressively prune the search space
 
-##Overview:
+## Overview:
 
 The project is split into three major components:
 
-##msBoard:
+## msBoard:
   - Responsible for all board and move semantics:
   - Board representation (bit-level)
   - Move generation and validation
@@ -23,7 +23,7 @@ The project is split into three major components:
   - Win detection
 All knowledge of how a board works or how a move is represented lives here.
 
-##msSolver:
+## msSolver:
 
   - Responsible for solving a given board:
   - Depth-first search with backtracking
@@ -32,7 +32,7 @@ All knowledge of how a board works or how a move is represented lives here.
   - Returns the full solution as a sequence of msBoard::Move
 The solver is stateless from the caller’s perspective — all internal data structures are reset per solve.
 
-##msGame:
+## msGame:
   - Responsible for game orchestration and user interaction
   - Maintains the current board
   - Tracks move history
@@ -40,7 +40,7 @@ The solver is stateless from the caller’s perspective — all internal data st
   - Queries the solver for the best move or full solution
   - Acts as the high-level API that a UI or CLI would talk to
 
-###Board Representation
+### Board Representation
   - Boards are represented as a uint64_t
   - The board is conceptually a 7×7 grid
   - Only 36 positions are playable
@@ -53,7 +53,7 @@ This compact representation enables:
   - Extremely cheap copying
   - Efficient hashing and canonicalization
 
-###Moves
+### Moves
 
 A move is represented internally as:
 
@@ -67,7 +67,7 @@ Key design decisions:
   - Other modules may use moves but cannot construct arbitrary ones
      - This prevents invalid or inconsistent moves from being created
   
-###Symmetry & Canonicalization
+### Symmetry & Canonicalization
   - Each board has up to 8 equivalent states:
     - 4 rotations (0°, 90°, 180°, 270°)
     - 4 reflections (horizontal, vertical, diagonal, anti-diagonal)
@@ -77,7 +77,7 @@ Key design decisions:
   - That canonical form is used for pruning
   - This reduces the search space dramatically and is the single biggest performance win.
 
-###Solver Strategy
+### Solver Strategy
   - Depth-first search using an explicit stack
   - Shared move buffer to reduce allocations
   - Canonical pruning at every node
@@ -90,12 +90,12 @@ The solver returns:
   - A vector of moves representing a valid solution
   - Or an empty vector if unsolvable
 
-###Configuration
+### Configuration
   - Some behavior is controlled at compile time via configuration.h, for example:
     - Whether to use a bitmap or hash set for visited boards
     - Memory-heavy optimizations when large RAM is available
 
-###Error Handling & CREs
+### Error Handling & CREs
 
 Throughout the codebase, you’ll see references to CRE.
   - CRE stands for Checked Runtime Error
@@ -107,18 +107,13 @@ CREs are used to:
   - Avoid defensive runtime checks in hot paths
   - They are not user-facing errors.
 
-###Building
+### Building
 
 This project requires C++17 or newer.
 
-Example build (clang):
+Example build (clang): clang++ -std=c++17 -O2 -Wall -Wextra *.cpp -o msGame
 
-clang++ -std=c++17 -O2 -Wall -Wextra *.cpp -o marble
-
-
-For profiling or debugging, you may want to disable -O2.
-
-###Performance Notes and Future Improvements
+### Performance Notes and Future Improvements
 
 When running with O3, the average solve breaks down into the following time consumers:
   - getCanonicalBits()  = 29%
