@@ -119,6 +119,7 @@ When running with O3, the average solve breaks down into the following time cons
   - getCanonicalBits()  = 29%
   - unordered_set usage = 28%
   - validMoves()        = 23%
+  All profiling was done using Apple Instruments
 
 Solve times range from less than a second on some starting boards to up to 10 minutes on unsolvable boards
   - From my own testing, the typical solve after a few moves have been made takes a couple seconds
